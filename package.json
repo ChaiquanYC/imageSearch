@@ -1,5 +1,6 @@
 {
-  "name": "image-search-electron",
+  "name": "imagesearch",
+  "productName": "ImageSearch",
   "version": "0.1.0",
   "description": "本地图像检索与图库管理客户端 - Electron + DINOv2 + SQLite",
   "main": "./out/main/index.js",

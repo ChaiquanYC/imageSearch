@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
@@ -12,10 +13,14 @@ import {
 import sqlitePkg from 'node-sqlite3-wasm'
 
 const { Database } = sqlitePkg
+const require = createRequire(import.meta.url)
+const pkg = require('../package.json')
 
 const MODEL_ID = 'Xenova/dinov2-small'
+// 与 Electron 的 app.getPath('userData') 保持一致：优先 productName
+const APP_NAME = pkg.productName || pkg.name
 const USER_DATA =
-  process.env.APP_USERDATA || path.join(os.homedir(), 'AppData', 'Roaming', 'image-search-electron')
+  process.env.APP_USERDATA || path.join(os.homedir(), 'AppData', 'Roaming', APP_NAME)
 const DATA = path.join(USER_DATA, 'data')
 const IMAGES = path.join(DATA, 'images')
 const DB_DIR = path.join(DATA, 'database')

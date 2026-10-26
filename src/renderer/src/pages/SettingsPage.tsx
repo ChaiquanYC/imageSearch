@@ -1,8 +1,16 @@
 import { useEffect, useState } from 'react'
-import type { AppInfo, ModelState, ReindexProgress, Settings } from '../../../shared/types'
-import { MODEL_CATALOG, modelMeta } from '../../../shared/types'
+import type {
+  AppInfo,
+  Device,
+  MigrateMode,
+  ModelState,
+  ReindexProgress,
+  Settings,
+  TextModelState
+} from '../../../shared/types'
+import { MODEL_CATALOG, TEXT_MODEL_CATALOG, modelMeta, textModelMeta } from '../../../shared/types'
 import { useConfirm, useToast } from '../components/Feedback'
-import { IconFolder, IconRefresh } from '../components/Icons'
+import { IconCpu, IconFolder, IconRefresh, IconText } from '../components/Icons'
 import { ProgressModal } from '../components/ProgressModal'
 import { api } from '../lib/api'
 
@@ -12,11 +20,16 @@ interface Props {
 
 type PathKey = 'modelDir' | 'storageDir' | 'dbFolder'
 
-const PATH_ROWS: Array<{ key: PathKey; label: string; hint: string; kind: 'model' | 'storage' | 'db' }> = [
+const PATH_ROWS: Array<{
+  key: PathKey
+  label: string
+  hint: string
+  kind: 'model' | 'storage' | 'db'
+}> = [
   {
     key: 'modelDir',
     label: '模型目录',
-    hint: 'DINOv2 ONNX 权重缓存位置，首次运行会自动下载到此处',
+    hint: '图像与文本 ONNX 权重的缓存位置，首次运行会自动下载到此处',
     kind: 'model'
   },
   {
@@ -39,6 +52,7 @@ export function SettingsPage({ onChanged }: Props) {
 
   const [settings, setSettings] = useState<Settings | null>(null)
   const [model, setModel] = useState<ModelState | null>(null)
+  const [textState, setTextState] = useState<TextModelState | null>(null)
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [drafts, setDrafts] = useState<Record<PathKey, string>>({
     modelDir: '',
@@ -47,23 +61,42 @@ export function SettingsPage({ onChanged }: Props) {
   })
   const [modelId, setModelId] = useState('')
   const [dtype, setDtype] = useState('fp32')
+  const [device, setDevice] = useState<Device>('cpu')
+  const [textModelId, setTextModelId] = useState('')
+  const [migrateMode, setMigrateMode] = useState<MigrateMode>('move')
+  const [dedupeOnImport, setDedupeOnImport] = useState(true)
   const [reindex, setReindex] = useState<ReindexProgress | null>(null)
   const [switching, setSwitching] = useState(false)
 
   useEffect(() => {
     if (!api) return
     void (async () => {
-      const [s, m, i] = await Promise.all([api.getSettings(), api.getModelState(), api.info()])
+      const [s, m, t, i] = await Promise.all([
+        api.getSettings(),
+        api.getModelState(),
+        api.getTextState(),
+        api.info()
+      ])
       setSettings(s)
       setModel(m)
+      setTextState(t)
       setInfo(i)
       setModelId(s.modelId)
       setDtype(s.dtype)
+      setDevice(s.device)
+      setTextModelId(s.textModelId)
+      setMigrateMode(s.migrateMode)
+      setDedupeOnImport(s.dedupeOnImport)
       setDrafts({ modelDir: s.modelDir, storageDir: s.storageDir, dbFolder: s.dbFolder })
     })()
-    const off = api.onReindexProgress((p) => setReindex(p))
-    return off
+    return api.onReindexProgress((p) => setReindex(p))
   }, [])
+
+  const persist = async (patch: Partial<Settings>) => {
+    const next = await api.updateSettings(patch)
+    setSettings(next)
+    return next
+  }
 
   const applyModel = async () => {
     if (!settings) return
@@ -93,9 +126,8 @@ export function SettingsPage({ onChanged }: Props) {
       onChanged()
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), 'error')
-      const m = await api.getModelState()
+      const [m, s] = await Promise.all([api.getModelState(), api.getSettings()])
       setModel(m)
-      const s = await api.getSettings()
       setSettings(s)
       setModelId(s.modelId)
       setDtype(s.dtype)
@@ -105,18 +137,84 @@ export function SettingsPage({ onChanged }: Props) {
     }
   }
 
+  const applyDevice = async () => {
+    if (!settings || device === settings.device) return
+    setSwitching(true)
+    try {
+      const state = await api.setDevice(device)
+      setModel(state)
+      const next = await api.getSettings()
+      setSettings(next)
+      toast(
+        state.fellBack
+          ? 'DirectML 启动失败，已自动回退 CPU'
+          : `推理后端已切换为 ${state.device === 'dml' ? 'DirectML（GPU）' : 'CPU'}`,
+        state.fellBack ? 'error' : 'success'
+      )
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error')
+      const m = await api.getModelState()
+      setModel(m)
+      setDevice(m.device)
+    } finally {
+      setSwitching(false)
+    }
+  }
+
+  const applyTextModel = async () => {
+    if (!settings || textModelId === settings.textModelId) return
+    const ok = await confirm({
+      title: '切换文本检索模型',
+      body: `即将切换到 ${textModelMeta(textModelId).label}。\n\n已有描述的文本向量会全部重建，图片和描述本身不受影响。`,
+      okText: '开始切换'
+    })
+    if (!ok) {
+      setTextModelId(settings.textModelId)
+      return
+    }
+    setSwitching(true)
+    try {
+      const state = await api.switchTextModel(textModelId)
+      setTextState(state)
+      const next = await api.getSettings()
+      setSettings(next)
+      toast(`文本模型已切换，维度 ${state.dimension}`, 'success')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error')
+      const s = await api.getSettings()
+      setSettings(s)
+      setTextModelId(s.textModelId)
+    } finally {
+      setSwitching(false)
+      setReindex(null)
+    }
+  }
+
   const doReindex = async () => {
     const ok = await confirm({
       title: '重建全部索引',
-      body: '将清空数据库中的全部特征向量，并逐张重新提取。图片和描述不会丢失。',
+      body: '将清空数据库中的全部图像特征向量，并逐张重新提取。图片和描述不会丢失。',
       okText: '开始重建'
     })
     if (!ok) return
     setSwitching(true)
     try {
       const count = await api.reindexAll()
-      toast(`索引重建完成，共 ${count} 张图片`, 'success')
+      toast(`图像索引重建完成，共 ${count} 张图片`, 'success')
       onChanged()
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setSwitching(false)
+      setReindex(null)
+    }
+  }
+
+  const doReindexText = async () => {
+    setSwitching(true)
+    try {
+      const count = await api.reindexText()
+      toast(`文本索引重建完成，共 ${count} 条描述`, 'success')
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), 'error')
     } finally {
@@ -134,12 +232,17 @@ export function SettingsPage({ onChanged }: Props) {
     if (!settings) return
     const target = drafts[row.key]
     if (!target || target === settings[row.key]) return
+    const moving = migrateMode === 'move'
     const ok = await confirm({
-      title: '迁移目录',
-      body: `将「${row.label}」从\n${settings[row.key]}\n改为\n${target}\n\n系统会把现有文件复制到新目录，成功后保存配置。${
-        row.kind === 'storage' ? '\n数据库里的图片路径会同步改写。' : ''
-      }${row.kind === 'model' ? '\n迁移后会重新加载模型。' : ''}`,
-      okText: '开始迁移'
+      title: moving ? '迁移目录（移动）' : '迁移目录（复制）',
+      body: `将「${row.label}」从\n${settings[row.key]}\n改为\n${target}\n\n${
+        moving
+          ? '文件会被移动到新目录，源目录中的文件随后清除（同盘瞬时完成，跨盘需要逐个复制）。'
+          : '文件会被复制到新目录，源目录保留，会占用双份磁盘空间。'
+      }${row.kind === 'storage' ? '\n数据库里的图片路径会同步改写。' : ''}${
+        row.kind === 'model' ? '\n迁移后会重新加载模型。' : ''
+      }`,
+      okText: moving ? '开始移动' : '开始复制'
     })
     if (!ok) {
       setDrafts((d) => ({ ...d, [row.key]: settings[row.key] }))
@@ -147,7 +250,7 @@ export function SettingsPage({ onChanged }: Props) {
     }
     setSwitching(true)
     try {
-      const result = await api.migrate(row.kind, target)
+      const result = await api.migrate(row.kind, target, migrateMode)
       const next = await api.getSettings()
       setSettings(next)
       setDrafts({
@@ -155,10 +258,13 @@ export function SettingsPage({ onChanged }: Props) {
         storageDir: next.storageDir,
         dbFolder: next.dbFolder
       })
-      const m = await api.getModelState()
+      const [m, t] = await Promise.all([api.getModelState(), api.getTextState()])
       setModel(m)
+      setTextState(t)
       toast(
-        `迁移完成：${result.moved} 个项目，${result.records} 条记录受影响`,
+        `迁移完成：${result.moved} 个项目，${result.records} 条记录受影响${
+          result.mode === 'move' ? '，源目录已清理' : ''
+        }`,
         'success'
       )
       onChanged()
@@ -179,20 +285,34 @@ export function SettingsPage({ onChanged }: Props) {
 
   const statusBadge = () => {
     if (!model) return <span className="badge warn">读取中</span>
-    if (model.ready) return <span className="badge">就绪 · {model.dimension} 维</span>
+    if (model.ready) {
+      return (
+        <span className="badge">
+          就绪 · {model.dimension} 维 · {model.device === 'dml' ? 'DirectML' : 'CPU'}
+        </span>
+      )
+    }
     if (model.loading) return <span className="badge warn">加载中…</span>
     return <span className="badge bad">{model.error ? '不可用' : '未初始化'}</span>
   }
+
+  const textBadge = () => {
+    if (!textState) return <span className="badge warn">读取中</span>
+    if (textState.ready) return <span className="badge">就绪 · {textState.dimension} 维</span>
+    return <span className="badge">未加载（首次文字检索时自动启用）</span>
+  }
+
+  const deviceAvailable = info?.availableDevices.includes('dml') ?? false
 
   return (
     <>
       <div className="page-head">
         <h1 className="page-title">系统设置</h1>
-        <p className="page-sub">模型引擎、存储路径与运行环境</p>
+        <p className="page-sub">模型引擎、文本检索、存储路径与运行环境</p>
       </div>
 
       <div className="panel">
-        <h2 className="panel-title">模型引擎</h2>
+        <h2 className="panel-title">图像模型</h2>
 
         <div className="setting-row">
           <div className="setting-main">
@@ -236,9 +356,13 @@ export function SettingsPage({ onChanged }: Props) {
             </div>
           </div>
           <div className="setting-ctrl">
-            <button className="btn" onClick={() => void doReindex()} disabled={switching || !model?.ready}>
+            <button
+              className="btn"
+              onClick={() => void doReindex()}
+              disabled={switching || !model?.ready}
+            >
               <IconRefresh />
-              重建全部索引
+              重建图像索引
             </button>
             <button className="btn primary" onClick={() => void applyModel()} disabled={switching}>
               应用模型配置
@@ -248,7 +372,139 @@ export function SettingsPage({ onChanged }: Props) {
       </div>
 
       <div className="panel">
+        <h2 className="panel-title">
+          <IconCpu size={15} /> 推理后端
+        </h2>
+        <div className="setting-row">
+          <div className="setting-main">
+            <div className="setting-label">计算设备</div>
+            <div className="setting-hint">
+              {deviceAvailable
+                ? `检测到显卡：${info?.gpuName ?? '未知'}。DirectML 走 GPU，批量入库明显更快；加载失败会自动回退 CPU。`
+                : '当前平台不提供 DirectML，只能使用 CPU 推理。'}
+            </div>
+          </div>
+          <div className="setting-ctrl">
+            <select
+              className="select"
+              value={device}
+              onChange={(e) => setDevice(e.target.value as Device)}
+              disabled={!deviceAvailable}
+            >
+              <option value="cpu">CPU</option>
+              <option value="dml">DirectML（GPU）</option>
+            </select>
+            <button
+              className="btn primary"
+              disabled={switching || device === settings?.device}
+              onClick={() => void applyDevice()}
+            >
+              应用
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2 className="panel-title">
+          <IconText size={15} /> 文本检索
+        </h2>
+
+        <div className="setting-row">
+          <div className="setting-main">
+            <div className="setting-label">文本嵌入模型</div>
+            <div className="setting-hint">
+              给描述和标签生成语义向量，决定「文字搜图」的效果。中文描述建议用多语言或 BGE 中文模型。
+            </div>
+          </div>
+          <div className="setting-ctrl">
+            {textBadge()}
+            <select
+              className="select"
+              value={textModelId}
+              onChange={(e) => setTextModelId(e.target.value)}
+            >
+              {TEXT_MODEL_CATALOG.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} · {m.dimension} 维
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn primary"
+              disabled={switching || textModelId === settings?.textModelId}
+              onClick={() => void applyTextModel()}
+            >
+              应用
+            </button>
+          </div>
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-main">
+            <div className="setting-label">索引维护</div>
+            <div className="setting-hint">
+              修改过描述后如果发现文字检索没跟上，可以手动重建一次文本索引。
+            </div>
+          </div>
+          <div className="setting-ctrl">
+            <button className="btn" disabled={switching} onClick={() => void doReindexText()}>
+              <IconRefresh />
+              重建文本索引
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
         <h2 className="panel-title">存储路径</h2>
+
+        <div className="setting-row">
+          <div className="setting-main">
+            <div className="setting-label">目录迁移方式</div>
+            <div className="setting-hint">
+              移动：搬完清空源目录，不占双份空间（同盘是瞬时改名）。
+              复制：保留源目录，只在确认没问题后手动清理。
+            </div>
+          </div>
+          <div className="setting-ctrl">
+            <select
+              className="select"
+              value={migrateMode}
+              onChange={(e) => {
+                const mode = e.target.value as MigrateMode
+                setMigrateMode(mode)
+                void persist({ migrateMode: mode })
+              }}
+            >
+              <option value="move">移动（推荐）</option>
+              <option value="copy">复制（保守）</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-main">
+            <div className="setting-label">导入去重</div>
+            <div className="setting-hint">
+              入库前先算内容哈希，完全相同（复制过的同一张图）直接跳过，避免素材库膨胀。
+            </div>
+          </div>
+          <div className="setting-ctrl">
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={dedupeOnImport}
+                onChange={(e) => {
+                  setDedupeOnImport(e.target.checked)
+                  void persist({ dedupeOnImport: e.target.checked })
+                }}
+              />
+              跳过完全相同的图片
+            </label>
+          </div>
+        </div>
+
         {PATH_ROWS.map((row) => (
           <div className="setting-row" key={row.key}>
             <div className="setting-main">
@@ -294,6 +550,8 @@ export function SettingsPage({ onChanged }: Props) {
           <dd>{info?.node ?? '—'}</dd>
           <dt>平台</dt>
           <dd>{info?.platform ?? '—'}</dd>
+          <dt>显卡</dt>
+          <dd>{info?.gpuName ?? '—'}</dd>
           <dt>数据目录</dt>
           <dd>{info?.userData ?? '—'}</dd>
         </dl>
@@ -314,10 +572,16 @@ export function SettingsPage({ onChanged }: Props) {
 
       {(switching || reindex) && (
         <ProgressModal
-          title={reindex ? '正在重建索引' : '正在切换模型'}
+          title={
+            reindex?.phase === 'text'
+              ? '正在重建文本索引'
+              : reindex
+                ? '正在重建图像索引'
+                : '正在处理'
+          }
           label={
             reindex
-              ? `已处理 ${reindex.done} / ${reindex.total} 张`
+              ? `已处理 ${reindex.done} / ${reindex.total} 条`
               : '正在加载模型权重，首次切换需要下载…'
           }
           value={reindex?.done ?? 0}

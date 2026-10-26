@@ -41,7 +41,11 @@ function Workspace() {
   useEffect(() => {
     if (!api) return
     const offModel = api.onModelProgress((p) => {
-      if (p.stage === 'ready') return
+      // 文本模型是懒加载的，它完成时也要把顶部进度条收掉
+      if (p.stage === 'ready') {
+        setBoot(null)
+        return
+      }
       if (p.stage === 'download') {
         setBoot(`正在下载模型 ${p.file ?? ''} ${(p.progress ?? 0).toFixed(0)}%`)
       } else {

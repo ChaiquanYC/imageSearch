@@ -2,7 +2,6 @@ import { app } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { DType, Settings } from '../shared/types'
-
 let cache: Settings | null = null
 
 function settingsFile() {
@@ -21,7 +20,11 @@ export function defaultSettings(): Settings {
     storageDir: path.join(root, 'images'),
     dbFolder: path.join(root, 'database'),
     hfMirror: 'https://hf-mirror.com',
-    dtype: 'fp32' as DType
+    dtype: 'fp32' as DType,
+    device: process.platform === 'win32' ? 'dml' : 'cpu',
+    textModelId: 'Xenova/bge-small-zh-v1.5',
+    migrateMode: 'move',
+    dedupeOnImport: true
   }
 }
 

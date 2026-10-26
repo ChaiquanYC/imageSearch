@@ -129,3 +129,5 @@ export class VectorIndex {
 }
 
 export const vectorIndex = new VectorIndex()
+/** 描述文本的向量索引，与图像索引完全独立（维度可能不同） */
+export const textIndex = new VectorIndex()

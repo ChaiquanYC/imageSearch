@@ -3,20 +3,34 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import zlib from 'node:zlib'
 import {
   env,
   AutoImageProcessor,
   AutoModel,
-  RawImage
+  RawImage,
+  pipeline
 } from '@huggingface/transformers'
 import sqlitePkg from 'node-sqlite3-wasm'
+import {
+  SIZE,
+  checker,
+  draw,
+  encodePNG,
+  hGradient,
+  rings,
+  solid,
+  stripes,
+  vGradient
+} from './lib-png.mjs'
+import { signatureFromRgb } from '../src/main/signature.ts'
 
 const { Database } = sqlitePkg
 const require = createRequire(import.meta.url)
 const pkg = require('../package.json')
 
 const MODEL_ID = 'Xenova/dinov2-small'
+const TEXT_MODEL_ID = 'Xenova/bge-small-zh-v1.5'
+const TEXT_POOLING = 'cls'
 // 与 Electron 的 app.getPath('userData') 保持一致：优先 productName
 const APP_NAME = pkg.productName || pkg.name
 const USER_DATA =
@@ -25,89 +39,6 @@ const DATA = path.join(USER_DATA, 'data')
 const IMAGES = path.join(DATA, 'images')
 const DB_DIR = path.join(DATA, 'database')
 const MODEL_DIR = path.join(DATA, 'models')
-
-/* ---------------- 极简 PNG 编码 ---------------- */
-const CRC_TABLE = (() => {
-  const table = new Int32Array(256)
-  for (let n = 0; n < 256; n++) {
-    let c = n
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
-    table[n] = c
-  }
-  return table
-})()
-
-function crc32(buf) {
-  let c = -1
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
-  return (c ^ -1) >>> 0
-}
-
-function chunk(type, data) {
-  const len = Buffer.alloc(4)
-  len.writeUInt32BE(data.length, 0)
-  const typeBuf = Buffer.from(type, 'ascii')
-  const crcBuf = Buffer.alloc(4)
-  crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0)
-  return Buffer.concat([len, typeBuf, data, crcBuf])
-}
-
-function encodePNG(width, height, rgb) {
-  const stride = width * 3
-  const raw = Buffer.alloc((stride + 1) * height)
-  for (let y = 0; y < height; y++) {
-    raw[y * (stride + 1)] = 0
-    Buffer.from(rgb.buffer, rgb.byteOffset + y * stride, stride).copy(
-      raw,
-      y * (stride + 1) + 1
-    )
-  }
-  const ihdr = Buffer.alloc(13)
-  ihdr.writeUInt32BE(width, 0)
-  ihdr.writeUInt32BE(height, 4)
-  ihdr[8] = 8
-  ihdr[9] = 2
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', ihdr),
-    chunk('IDAT', zlib.deflateSync(raw, { level: 6 })),
-    chunk('IEND', Buffer.alloc(0))
-  ])
-}
-
-/* ---------------- 图案生成 ---------------- */
-const SIZE = 256
-
-function draw(fn) {
-  const buf = new Uint8Array(SIZE * SIZE * 3)
-  for (let y = 0; y < SIZE; y++) {
-    for (let x = 0; x < SIZE; x++) {
-      const [r, g, b] = fn(x, y)
-      const i = (y * SIZE + x) * 3
-      buf[i] = Math.max(0, Math.min(255, r | 0))
-      buf[i + 1] = Math.max(0, Math.min(255, g | 0))
-      buf[i + 2] = Math.max(0, Math.min(255, b | 0))
-    }
-  }
-  return buf
-}
-
-const solid = (c) => () => c
-const vGradient = (a, b) => (x, y) => {
-  const t = y / SIZE
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
-}
-const hGradient = (a, b) => (x, y) => {
-  const t = x / SIZE
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
-}
-const stripes = (a, b, width) => (x) => (Math.floor(x / width) % 2 === 0 ? a : b)
-const checker = (a, b, size) => (x, y) =>
-  (Math.floor(x / size) + Math.floor(y / size)) % 2 === 0 ? a : b
-const rings = (a, b) => (x, y) => {
-  const d = Math.hypot(x - SIZE / 2, y - SIZE / 2)
-  return Math.floor(d / 18) % 2 === 0 ? a : b
-}
 
 const SPECS = [
   { name: '纯色·正红', pattern: solid([214, 48, 49]), desc: '品牌主色参考·正红' },
@@ -186,6 +117,9 @@ async function main() {
   const dbFile = path.join(DB_DIR, 'image.db')
   if (fs.existsSync(dbFile)) fs.rmSync(dbFile, { force: true })
 
+  // 演示图用固定文件名：重复播种会覆盖同名文件，不会在存储目录里堆孤儿
+  const demoName = (i) => `demo-${String(i + 1).padStart(2, '0')}`
+
   console.log('[seed] 加载模型…')
   env.allowRemoteModels = true
   env.allowLocalModels = true
@@ -197,6 +131,7 @@ async function main() {
   const model = await AutoModel.from_pretrained(MODEL_ID, { dtype: 'fp32' })
 
   const db = new Database(dbFile)
+  // 与 src/main/database.ts 的 v2 schema 保持一致
   db.exec(`
     CREATE TABLE IF NOT EXISTS images (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,8 +142,19 @@ async function main() {
     );
     CREATE INDEX IF NOT EXISTS idx_images_created ON images(created_at DESC);
   `)
+  db.exec(`
+    ALTER TABLE images ADD COLUMN tags TEXT NOT NULL DEFAULT '';
+    ALTER TABLE images ADD COLUMN text_vector BLOB;
+    ALTER TABLE images ADD COLUMN content_hash TEXT;
+    ALTER TABLE images ADD COLUMN file_size INTEGER;
+    ALTER TABLE images ADD COLUMN deleted_at TIMESTAMP;
+    ALTER TABLE images ADD COLUMN signature BLOB;
+    PRAGMA user_version = 3;
+    CREATE INDEX IF NOT EXISTS idx_images_hash ON images(content_hash);
+    CREATE INDEX IF NOT EXISTS idx_images_deleted ON images(deleted_at);
+  `)
   const insert = db.prepare(
-    'INSERT INTO images (image_path, vector_data, description, created_at) VALUES (?, ?, ?, ?)'
+    'INSERT INTO images (image_path, vector_data, description, tags, content_hash, file_size, signature, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   )
 
   const queryPath = path.join(IMAGES, 'query-red.png')
@@ -217,8 +163,7 @@ async function main() {
     const spec = SPECS[i]
     const rgb = draw(spec.pattern)
     const png = encodePNG(SIZE, SIZE, rgb)
-    const fileName = `${crypto.randomUUID()}.png`
-    const filePath = path.join(IMAGES, fileName)
+    const filePath = path.join(IMAGES, `${demoName(i)}.png`)
     fs.writeFileSync(filePath, png)
 
     const image = await RawImage.fromBlob(new Blob([new Uint8Array(png)]))
@@ -242,6 +187,10 @@ async function main() {
       filePath,
       new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength),
       spec.desc,
+      spec.name.split('·').join(','),
+      crypto.createHash('sha256').update(png).digest('hex'),
+      png.length,
+      signatureFromRgb(SIZE, SIZE, rgb),
       created
     ])
     process.stdout.write(`\r[seed] ${i + 1}/${SPECS.length} ${spec.name}          `)
@@ -249,7 +198,72 @@ async function main() {
     if (i === 0) fs.writeFileSync(queryPath, png)
   }
 
+  // 造两对重复图，方便验证查重能力
+  const dupPlans = [
+    { index: 0, note: '内容完全相同的副本', brighten: 0 },
+    { index: 8, note: '亮度略微不同的近重复图', brighten: 8 }
+  ]
+  for (const plan of dupPlans) {
+    const spec = SPECS[plan.index]
+    let rgb = draw(spec.pattern)
+    if (plan.brighten) {
+      rgb = Uint8Array.from(rgb, (v) => Math.max(0, Math.min(255, v + plan.brighten)))
+    }
+    const png = encodePNG(SIZE, SIZE, rgb)
+    const filePath = path.join(IMAGES, `demo-dup-${plan.index}.png`)
+    fs.writeFileSync(filePath, png)
+
+    const image = await RawImage.fromBlob(new Blob([new Uint8Array(png)]))
+    const out = await model(await processor(image))
+    const tensor = out.pooler_output ?? out.last_hidden_state
+    const dim = tensor.dims[tensor.dims.length - 1]
+    const data =
+      tensor.data instanceof Float32Array ? tensor.data : Float32Array.from(tensor.data)
+    const vec = new Float32Array(data.slice(0, dim))
+    let norm = 0
+    for (let j = 0; j < dim; j++) norm += vec[j] * vec[j]
+    norm = Math.sqrt(norm)
+    for (let j = 0; j < dim; j++) vec[j] /= norm
+
+    insert.run([
+      filePath,
+      new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength),
+      `${spec.desc}（${plan.note}）`,
+      `${spec.name.split('·').join(',')},重复样例`,
+      crypto.createHash('sha256').update(png).digest('hex'),
+      png.length,
+      signatureFromRgb(SIZE, SIZE, rgb),
+      '2026-10-26 15:30:00'
+    ])
+    console.log(`\n[seed] 重复样例: ${spec.name} · ${plan.note}`)
+  }
+
+  // 先释放插入语句，避免长时间占用后再开新语句时 WASM 句柄冲突
   insert.finalize()
+
+  // 给所有描述预生成文本向量，避免首次文字检索时再等模型下载
+  console.log('[seed] 生成文本向量…')
+  const textPipe = await pipeline('feature-extraction', TEXT_MODEL_ID, { dtype: 'q8' })
+  const rows = db.all('SELECT id, description FROM images ORDER BY id')
+  const updateText = db.prepare('UPDATE images SET text_vector = ? WHERE id = ?')
+  for (let i = 0; i < rows.length; i++) {
+    const out = await textPipe(rows[i].description, { pooling: TEXT_POOLING, normalize: true })
+    const data = out.data instanceof Float32Array ? out.data : Float32Array.from(out.data)
+    const blob = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+    // WASM SQLite 偶尔会在连续写 BLOB 时抛 SQLITE_IOERR，重试一次即可
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        updateText.run([blob, rows[i].id])
+        break
+      } catch (err) {
+        if (attempt === 2) throw err
+        await new Promise((r) => setTimeout(r, 60))
+      }
+    }
+    if (i % 5 === 0) process.stdout.write(`\r[seed] 文本向量 ${i + 1}/${rows.length}   `)
+  }
+  updateText.finalize()
+
   db.close()
   console.log('\n[seed] 完成，图片目录:', IMAGES)
   console.log('[seed] 查询图:', queryPath)

@@ -2,7 +2,7 @@
   "name": "imagesearch",
   "productName": "ImageSearch",
   "version": "0.1.0",
-  "description": "本地图像检索与图库管理客户端 - Electron + DINOv2 + SQLite",
+  "description": "\u672c\u5730\u56fe\u50cf\u68c0\u7d22\u4e0e\u56fe\u5e93\u7ba1\u7406\u5ba2\u6237\u7aef - Electron + DINOv2 + SQLite",
   "main": "./out/main/index.js",
   "author": "chaiquan",
   "license": "MIT",
@@ -13,9 +13,10 @@
     "preview": "electron-vite preview",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "verify": "node scripts/verify-core.mjs",
-    "seed": "node scripts/seed-demo.mjs",
-    "dist": "electron-vite build && electron-builder --win --x64"
+    "verify": "node --import ./scripts/ts-hook.mjs scripts/verify-core.mjs",
+    "seed": "node --import ./scripts/ts-hook.mjs scripts/seed-demo.mjs",
+    "dist": "electron-vite build && electron-builder --win --x64",
+    "e2e": "node scripts/e2e-ipc.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.1",

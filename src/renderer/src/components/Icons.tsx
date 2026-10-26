@@ -99,3 +99,44 @@ export const IconImage = ({ size = 28 }: Props) => (
     <path d="m4 17 4.5-4.5L13 17l3-3 4 4" />
   </svg>
 )
+
+export const IconDownload = ({ size = 15 }: Props) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base}>
+    <path d="M12 4v11m0 0 4.5-4.5M12 15l-4.5-4.5" />
+    <path d="M4 16.5V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2.5" />
+  </svg>
+)
+
+export const IconRestore = ({ size = 15 }: Props) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base}>
+    <path d="M4 12a8 8 0 1 1 2.3 5.7" />
+    <path d="M4 6v6h6" />
+  </svg>
+)
+
+export const IconDuplicate = ({ size = 15 }: Props) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base}>
+    <rect x="8" y="8" width="12" height="12" rx="2.2" />
+    <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+  </svg>
+)
+
+export const IconText = ({ size = 15 }: Props) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base}>
+    <path d="M5 6V4h14v2M12 4v16M9 20h6" />
+  </svg>
+)
+
+export const IconSort = ({ size = 15 }: Props) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base}>
+    <path d="M4 7h10M4 12h7M4 17h4" />
+    <path d="M17 8v11m0 0 3-3m-3 3-3-3" />
+  </svg>
+)
+
+export const IconCpu = ({ size = 15 }: Props) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" {...base}>
+    <rect x="7" y="7" width="10" height="10" rx="2" />
+    <path d="M10 3v4m4-4v4m-4 10v4m4-4v4M3 10h4m-4 4h4m10-4h4m-4 4h4" />
+  </svg>
+)

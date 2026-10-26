@@ -14,6 +14,8 @@ let currentKey = ''
 let state: ModelState = {
   id: '',
   dtype: 'fp32',
+  device: 'cpu',
+  fellBack: false,
   ready: false,
   loading: false,
   dimension: 0
@@ -38,12 +40,14 @@ function l2normalize(vec: Float32Array): Float32Array {
 }
 
 export async function loadEmbedder(settings: Settings, onProgress?: ProgressFn) {
-  const key = `${settings.modelId}::${settings.dtype}`
+  const key = `${settings.modelId}::${settings.dtype}::${settings.device}`
   if (model && processor && currentKey === key) return state
 
   state = {
     id: settings.modelId,
     dtype: settings.dtype,
+    device: settings.device,
+    fellBack: false,
     ready: false,
     loading: true,
     dimension: state.dimension
@@ -64,10 +68,29 @@ export async function loadEmbedder(settings: Settings, onProgress?: ProgressFn) 
       progress_callback: (p: Record<string, unknown>) => onProgress?.(toProgress('download', p))
     })) as ProcessorT
 
-    model = await AutoModel.from_pretrained(settings.modelId, {
-      dtype,
-      progress_callback: (p: Record<string, unknown>) => onProgress?.(toProgress('download', p))
-    })
+    const attempt = async (device: 'cpu' | 'dml') =>
+      AutoModel.from_pretrained(settings.modelId, {
+        dtype,
+        device,
+        progress_callback: (p: Record<string, unknown>) => onProgress?.(toProgress('download', p))
+      })
+
+    let usedDevice: 'cpu' | 'dml' = settings.device
+    let fellBack = false
+    try {
+      model = await attempt(usedDevice)
+    } catch (err) {
+      if (usedDevice === 'dml') {
+        // DirectML 在某些驱动/算子组合下会初始化失败，回退 CPU 保证可用
+        console.warn('[embedder] DirectML 加载失败，回退 CPU', err)
+        usedDevice = 'cpu'
+        fellBack = true
+        onProgress?.({ stage: 'load', message: 'DirectML 不可用，已回退到 CPU 推理' })
+        model = await attempt('cpu')
+      } else {
+        throw err
+      }
+    }
 
     const cfg = (model.config ?? {}) as unknown as Record<string, number>
     const dim = cfg.hidden_size ?? cfg.d_model ?? modelMeta(settings.modelId).dimension
@@ -76,11 +99,16 @@ export async function loadEmbedder(settings: Settings, onProgress?: ProgressFn) 
     state = {
       id: settings.modelId,
       dtype: settings.dtype,
+      device: usedDevice,
+      fellBack,
       ready: true,
       loading: false,
       dimension: Number(dim) || modelMeta(settings.modelId).dimension
     }
-    onProgress?.({ stage: 'ready', message: `模型就绪 · ${state.dimension} 维` })
+    onProgress?.({
+      stage: 'ready',
+      message: `模型就绪 · ${state.dimension} 维 · ${usedDevice === 'dml' ? 'DirectML' : 'CPU'}`
+    })
     return state
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

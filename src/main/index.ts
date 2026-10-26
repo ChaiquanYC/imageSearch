@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { BrowserWindow, app, dialog, nativeImage, net, protocol, shell } from 'electron'
 import { openStore } from './database'
 import { loadEmbedder } from './embedder'
+import { backfillFingerprints } from './importer'
 import { registerIpc, reloadIndexFromDb, setWindowGetter } from './ipc'
 import { ensureDirs, getSettings } from './settings'
 
@@ -198,6 +199,13 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow = createWindow(route)
 
     await bootstrap(mainWindow)
+
+    // 后台给历史记录补算哈希与签名，让导入去重/查重对老库也生效（不阻塞启动）
+    setTimeout(() => {
+      void backfillFingerprints((done, total) => {
+        if (done >= total) bootLog(`fingerprint backfill done ${total}`)
+      }).catch((err) => bootLog(`fingerprint backfill failed: ${err}`))
+    }, 3000)
 
     // 支持 `ImageSearch.exe --query <图片路径>`：启动即用该图检索
     const queryPath = argValue('--query')

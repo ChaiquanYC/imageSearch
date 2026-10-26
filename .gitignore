@@ -1,0 +1,10 @@
+node_modules/
+out/
+release/
+.model-cache/
+.shots/
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db

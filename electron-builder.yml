@@ -1,0 +1,31 @@
+appId: com.chaiquan.imagesearch
+productName: ImageSearch
+copyright: Copyright © 2026 chaiquan
+
+directories:
+  output: release
+
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+  - '!**/{test,tests,__tests__,example,examples,docs}/**'
+
+asarUnpack:
+  - '**/node_modules/onnxruntime-node/**'
+  - '**/node_modules/node-sqlite3-wasm/dist/*.wasm'
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ImageSearch

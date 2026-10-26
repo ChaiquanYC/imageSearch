@@ -1,0 +1,36 @@
+{
+  "name": "image-search-electron",
+  "version": "0.1.0",
+  "description": "本地图像检索与图库管理客户端 - Electron + DINOv2 + SQLite",
+  "main": "./out/main/index.js",
+  "author": "chaiquan",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "verify": "node scripts/verify-core.mjs",
+    "seed": "node scripts/seed-demo.mjs",
+    "dist": "electron-vite build && electron-builder --win --x64"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.1",
+    "node-sqlite3-wasm": "^0.8.61"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5"
+  }
+}
